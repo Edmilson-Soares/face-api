@@ -1,0 +1,64 @@
+// Exemplo 3 — identificação 1:N: cadastra pessoas a partir de images/gallery/
+// (o nome do arquivo é o nome da pessoa) e reconhece quem aparece nas fotos
+// de images/probe/. Rostos que não estão na galeria aparecem como "?".
+//   fogu run examples/identificar.fg
+// Resultados: out/identificar_<foto>.jpg e a galeria salva em out/galeria.json.
+import face from "../face.fg"
+import fs from "fogu:fs"
+import path from "fogu:path"
+import system from "fogu:system"
+
+fn fail(msg) {
+    print("erro:", msg)
+    system.exit(1)
+}
+
+fn round2(x) {
+    if x < 0 { return int(x * 100 - 0.5) / 100.0 }
+    return int(x * 100 + 0.5) / 100.0
+}
+
+const [eng, err] = face.engine()
+if err != nil { fail(err.message) }
+
+// 1. Cadastro: uma foto por pessoa (dá para cadastrar várias do mesmo nome).
+const [gal, gerr] = face.gallery(eng)
+if gerr != nil { fail(gerr.message) }
+for file in fs.list("images/gallery") {
+    const name = path.stem(file)
+    const [n, eerr] = gal.enroll(name, `images/gallery/${file}`)
+    if eerr != nil { fail(`${file}: ${eerr.message}`) }
+    print(`cadastrado: ${name} (${n} amostra)`)
+}
+
+const [_s, serr] = gal.save("out/galeria.json")
+if serr != nil { fail(serr.message) }
+
+// 2. Identificação: uma galeria recarregada do disco funciona igual.
+const [saved, lerr] = face.gallery(eng, "out/galeria.json")
+if lerr != nil { fail(lerr.message) }
+
+for file in fs.list("images/probe") {
+    const input = `images/probe/${file}`
+    const [r, ierr] = saved.identify(input)
+    if ierr != nil {
+        print(`${file}: ${ierr.message}`)
+        continue
+    }
+    print(`\n${file}: ${len(r.faces)} rosto(s)`)
+    for f in r.faces {
+        const best = f.candidates[0]
+        if f.name != nil {
+            print(`  ${f.name} (similaridade ${round2(f.similarity)})`)
+        } else {
+            print(`  desconhecido (mais parecido: ${best.name}, ${round2(best.similarity)})`)
+        }
+    }
+    const out = `out/identificar_${path.stem(file)}.jpg`
+    face.draw(input, out, r.faces)?
+    print(`  -> ${out}`)
+}
+
+saved.close()
+gal.close()
+eng.close()

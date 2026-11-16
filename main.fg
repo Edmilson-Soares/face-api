@@ -1,0 +1,27 @@
+// Exemplo rápido: cadastra uma pessoa e procura por ela numa foto de grupo.
+//   fogu run main.fg
+// Os exemplos completos estão em examples/ (detectar, comparar, identificar).
+import face from "./face.fg"
+
+fn main() {
+    print(`foguface ${face.version()?}`)
+    const eng = face.engine()?
+    const gal = face.gallery(eng)?
+    gal.enroll("Obama", "images/gallery/obama.jpg")?
+    gal.enroll("Biden", "images/gallery/biden.jpg")?
+
+    const r = gal.identify("images/probe/situation_room.jpg")?
+    for f in r.faces {
+        if f.name != nil { print(`${f.name} em (${int(f.bbox.x)}, ${int(f.bbox.y)}), similaridade ${int(f.similarity * 100)}%`) }
+    }
+    print(`${len(r.faces)} rostos na foto`)
+    face.draw("images/probe/situation_room.jpg", "out/main.jpg", r.faces)?
+    print("imagem anotada: out/main.jpg")
+
+    gal.close()
+    eng.close()
+    return true, nil
+}
+
+const [_ok, err] = main()
+if err != nil { print("erro:", err.message) }

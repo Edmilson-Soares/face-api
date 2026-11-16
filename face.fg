@@ -1,0 +1,233 @@
+// face.fg — detecção, reconhecimento e identificação de faces para Fogu,
+// sobre a lib Rust foguface (insight-face-rs + ONNX Runtime) via fogu:ffi.
+//
+// Modelos (ONNX, InsightFace buffalo_l): models/det_10g.onnx (detecção SCRFD)
+// e models/w600k_r50.onnx (reconhecimento ArcFace, 512 dimensões). Veja README.md.
+import { Native, mem as _nmem, platform as _platform } from "./_native.fg"
+import json from "fogu:json"
+
+const _SIGNATURES = {
+    fface_set_sink: [["ptr"], "i32"],
+    fface_version: [["buffer", "i64"], "i64"],
+    fface_last_error: [["buffer", "i64"], "i64"],
+    fface_engine_new: [["str"], "i64"],
+    fface_engine_free: [["i64"], "i32"],
+    fface_detect_file: [["i64", "str", "i32", "buffer", "i64"], "i64"],
+    fface_detect_bytes: [["i64", "buffer", "i64", "i32", "buffer", "i64"], "i64"],
+    fface_compare_files: [["i64", "str", "str", "i64", "buffer", "i64"], "i64"],
+    fface_similarity: [["str", "str", "buffer", "i64"], "i64"],
+    fface_gallery_new: [[], "i64"],
+    fface_gallery_load: [["str"], "i64"],
+    fface_gallery_save: [["i64", "str"], "i32"],
+    fface_gallery_free: [["i64"], "i32"],
+    fface_gallery_enroll_file: [["i64", "i64", "str", "str"], "i64"],
+    fface_gallery_enroll_bytes: [["i64", "i64", "str", "buffer", "i64"], "i64"],
+    fface_gallery_enroll_embedding: [["i64", "str", "str"], "i64"],
+    fface_gallery_remove: [["i64", "str"], "i64"],
+    fface_gallery_list: [["i64", "buffer", "i64"], "i64"],
+    fface_identify_file: [["i64", "i64", "str", "i64", "i64", "buffer", "i64"], "i64"],
+    fface_identify_bytes: [["i64", "i64", "buffer", "i64", "i64", "i64", "buffer", "i64"], "i64"],
+    fface_draw_file: [["str", "str", "str", "str"], "i32"],
+}
+
+const _native = new Native("face", "foguface", "fface", _SIGNATURES, "FOGU_FACE_LIB")
+const _fn = _native.api
+
+// Limiar padrão de similaridade (cosseno) para "mesma pessoa".
+export const DEFAULT_THRESHOLD = 0.40
+
+// Nome da plataforma no formato dos targets do Fogu: windows-x64, linux-arm64, macos-arm64...
+export fn platform() { return _platform() }
+
+// No import: reconhece o sistema e a arquitetura e já carrega o binário
+// certo (native/<so>-<arch>/foguface...). Se faltar, o erro volta na primeira chamada.
+_native.autoload()
+
+// O que foi detectado e carregado: { platform, os, file, path, loaded, error }.
+export fn nativeInfo() { return _native.info() }
+
+// Carrega native/<plataforma>/foguface (.dll, .so ou .dylib), native/foguface,
+// o build do cargo ou FOGU_FACE_LIB. `path` força um arquivo ou pasta.
+export fn load(path = nil) {
+    return _native.load(path)
+}
+
+fn _last_error() { return _native.lastError() }
+
+fn _status(rc) { return _native.status(rc) }
+
+// Saídas chegam inteiras pelo callback (sink): a inferência roda uma vez só,
+// sem buffer grande "por garantia" nem a segunda chamada quando não cabia.
+fn _text(f, cap = 0) { return _native.text(f) }
+
+fn _json(f, cap = 0) { return _native.json(f) }
+
+// Imagem como buffer do ffi: aceita str, lista de bytes ou bytes(...).
+fn _mem(data) { return _nmem(data) }
+
+// Limiar em milésimos para a API C (0 = padrão da lib).
+fn _milli(threshold) {
+    if threshold == nil { return 0 }
+    return int(threshold * 1000)
+}
+
+export fn version() {
+    load()?
+    return _text((b, n) => _fn.fface_version(b, n), 64)
+}
+
+// Similaridade de cosseno entre dois embeddings (listas de 512 números), de -1 a 1.
+export fn similarity(a, b) {
+    load()?
+    const r = _json((buf, n) => _fn.fface_similarity(json.stringify(a), json.stringify(b), buf, n), 128)?
+    return r.similarity, nil
+}
+
+// Desenha os rostos (resultado de detect/identify, ou a lista faces) sobre a imagem
+// `input` e salva em `output` (.jpg, .png...). Verde: identificado/detectado;
+// vermelho: desconhecido. Rótulo: `label` do rosto, ou `name` + similaridade.
+// `font` é um .ttf; sem ele procura uma fonte do sistema (sem fonte, sem rótulos).
+export fn draw(input, output, faces, font = "") {
+    load()?
+    return _status(_fn.fface_draw_file(input, output, json.stringify(faces), font))
+}
+
+// Motor de faces: os dois modelos ONNX carregados.
+export struct FaceEngine {
+    handle = 0
+
+    new(handle) {
+        this.handle = handle
+    }
+
+    // Rostos de uma imagem (caminho). Cada rosto: score, bbox {x, y, width, height}
+    // e landmarks (5 pontos [x, y]: olhos, nariz, cantos da boca), em pixels.
+    // withEmbedding: true inclui `embedding` (512 números).
+    detect(path, withEmbedding = false) {
+        let flag = 0
+        if withEmbedding { flag = 1 }
+        return _json((b, n) => _fn.fface_detect_file(this.handle, path, flag, b, n))
+    }
+
+    // Igual a detect, para uma imagem codificada (JPEG, PNG...) em memória.
+    detectBytes(data, withEmbedding = false) {
+        let flag = 0
+        if withEmbedding { flag = 1 }
+        const [mem, size] = _mem(data)
+        return _json((b, n) => _fn.fface_detect_bytes(this.handle, mem, size, flag, b, n))
+    }
+
+    // Embedding (512 números) do maior rosto da imagem.
+    embedding(path) {
+        const r = this.detect(path, true)?
+        if len(r.faces) == 0 { return nil, error(`nenhum rosto em ${path}`) }
+        let best = r.faces[0]
+        for f in r.faces {
+            if f.bbox.width * f.bbox.height > best.bbox.width * best.bbox.height { best = f }
+        }
+        return best.embedding, nil
+    }
+
+    // Verificação 1:1: compara o maior rosto de cada imagem.
+    // Devolve { similarity, same, threshold }.
+    compare(pathA, pathB, threshold = nil) {
+        return _json((b, n) => _fn.fface_compare_files(this.handle, pathA, pathB, _milli(threshold), b, n), 256)
+    }
+
+    close() {
+        if this.handle == 0 { return true, nil }
+        const rc = _fn.fface_engine_free(this.handle)
+        this.handle = 0
+        return _status(rc)
+    }
+}
+
+// Galeria de pessoas conhecidas, para identificação 1:N.
+export struct Gallery {
+    handle = 0
+    engine = nil
+
+    new(handle, engine) {
+        this.handle = handle
+        this.engine = engine
+    }
+
+    // Cadastra o maior rosto da foto como `name`. Várias fotos da mesma pessoa
+    // melhoram a identificação. Devolve quantas amostras a pessoa tem.
+    enroll(name, path) {
+        const n = _fn.fface_gallery_enroll_file(this.handle, this.engine.handle, name, path)
+        if n < 0 { return nil, _last_error() }
+        return n, nil
+    }
+
+    enrollBytes(name, data) {
+        const [mem, size] = _mem(data)
+        const n = _fn.fface_gallery_enroll_bytes(this.handle, this.engine.handle, name, mem, size)
+        if n < 0 { return nil, _last_error() }
+        return n, nil
+    }
+
+    // Cadastra um embedding já calculado (ex.: engine.embedding(path)).
+    enrollEmbedding(name, embedding) {
+        const n = _fn.fface_gallery_enroll_embedding(this.handle, name, json.stringify(embedding))
+        if n < 0 { return nil, _last_error() }
+        return n, nil
+    }
+
+    // Remove a pessoa. Devolve true se ela existia.
+    remove(name) {
+        const n = _fn.fface_gallery_remove(this.handle, name)
+        if n < 0 { return nil, _last_error() }
+        return n == 1, nil
+    }
+
+    // Pessoas cadastradas: [{ name, samples }].
+    list() {
+        return _json((b, n) => _fn.fface_gallery_list(this.handle, b, n))
+    }
+
+    // Identifica todos os rostos da imagem. Cada rosto traz bbox, landmarks, score,
+    // name (nil se desconhecido), similarity (da melhor candidata) e candidates
+    // ([{ name, similarity }], as topK mais parecidas).
+    identify(path, threshold = nil, topK = 3) {
+        return _json((b, n) => _fn.fface_identify_file(this.handle, this.engine.handle, path, _milli(threshold), topK, b, n))
+    }
+
+    identifyBytes(data, threshold = nil, topK = 3) {
+        const [mem, size] = _mem(data)
+        return _json((b, n) => _fn.fface_identify_bytes(this.handle, this.engine.handle, mem, size, _milli(threshold), topK, b, n))
+    }
+
+    // Salva nomes + embeddings em JSON (as fotos não são guardadas).
+    save(path) {
+        return _status(_fn.fface_gallery_save(this.handle, path))
+    }
+
+    close() {
+        if this.handle == 0 { return true, nil }
+        const rc = _fn.fface_gallery_free(this.handle)
+        this.handle = 0
+        return _status(rc)
+    }
+}
+
+// Carrega os modelos. options:
+//   det_model     modelo de detecção SCRFD   ("models/det_10g.onnx")
+//   rec_model     modelo de reconhecimento ArcFace ("models/w600k_r50.onnx")
+//   idle_timeout  segundos sem uso até liberar a memória dos modelos (0 = nunca);
+//                 eles são recarregados sozinhos na próxima chamada
+export fn engine(options = {}) {
+    load()?
+    const handle = _fn.fface_engine_new(json.stringify(options))
+    if handle < 0 { return nil, _last_error() }
+    return new FaceEngine(handle), nil
+}
+
+// Galeria vazia, ou carregada de um arquivo salvo com gallery.save(path).
+export fn gallery(eng, path = nil) {
+    load()?
+    let handle = 0
+    if path == nil { handle = _fn.fface_gallery_new() } else { handle = _fn.fface_gallery_load(path) }
+    if handle < 0 { return nil, _last_error() }
+    return new Gallery(handle, eng), nil
+}

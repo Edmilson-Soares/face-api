@@ -1,0 +1,136 @@
+// Testes do face.fg com as fotos de images/ (domínio público).
+// Precisam da lib nativa (fogu run build:native) e dos modelos (fogu run models).
+//   fogu test
+import { test, expect } from "fogu:test"
+import face from "./face.fg"
+import fs from "fogu:fs"
+
+const [eng, engErr] = face.engine()
+
+test("carrega a lib nativa e os modelos", (): error => {
+    expect(face.version()?).toBe("0.1.0")
+    expect(engErr).toBeNil()
+    return nil
+})
+
+test("modelo inexistente vira erro", (): error => {
+    const [e, err] = face.engine({ det_model: "models/nao_existe.onnx" })
+    expect(e).toBeNil()
+    expect(err.message).toContain("model not found")
+    return nil
+})
+
+test("detecta um rosto num retrato, com caixa e 5 landmarks", (): error => {
+    const r = eng.detect("images/gallery/obama.jpg")?
+    expect(r.faces).toHaveLength(1)
+    const f = r.faces[0]
+    expect(f.score > 0.5).toBe(true)
+    expect(f.landmarks).toHaveLength(5)
+    expect(f.bbox.x > 0 && f.bbox.x + f.bbox.width < r.width).toBe(true)
+    expect(f.get("embedding")).toBeNil()
+    return nil
+})
+
+test("detecta vários rostos numa foto de grupo", (): error => {
+    const r = eng.detect("images/probe/situation_room.jpg")?
+    expect(len(r.faces) >= 10).toBe(true)
+    return nil
+})
+
+test("embedding tem 512 dimensões", (): error => {
+    const e = eng.embedding("images/gallery/biden.jpg")?
+    expect(e).toHaveLength(512)
+    expect(face.similarity(e, e)? > 0.99).toBe(true)
+    return nil
+})
+
+test("detectBytes e identifyBytes com uma imagem em memória", (): error => {
+    // PNG mínimo de 1x1 pixel (sem rosto)
+    const png = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 248, 255, 255, 63, 0, 5, 254, 2, 254, 13, 239, 70, 184, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]
+    const r = eng.detectBytes(png)?
+    expect(r.width).toBe(1)
+    expect(r.faces).toHaveLength(0)
+    const gal = face.gallery(eng)?
+    const i = gal.identifyBytes(bytes(png))?
+    expect(i.faces).toHaveLength(0)
+    const [_n, err] = gal.enrollBytes("ninguém", png)
+    expect(err.message).toContain("no face")
+    gal.close()
+    return nil
+})
+
+test("compare: mesma pessoa em anos diferentes", (): error => {
+    const r = eng.compare("images/gallery/biden.jpg", "images/probe/biden_2013.jpg")?
+    expect(r.same).toBe(true)
+    const h = eng.compare("images/gallery/harris.jpg", "images/probe/harris_senado.jpg")?
+    expect(h.same).toBe(true)
+    return nil
+})
+
+test("compare: pessoas diferentes", (): error => {
+    const r = eng.compare("images/gallery/obama.jpg", "images/gallery/biden.jpg")?
+    expect(r.same).toBe(false)
+    expect(r.similarity < 0.3).toBe(true)
+    return nil
+})
+
+test("galeria identifica Obama e Biden na foto de grupo", (): error => {
+    const gal = face.gallery(eng)?
+    for name in ["obama", "biden", "harris"] { gal.enroll(name, `images/gallery/${name}.jpg`)? }
+    const r = gal.identify("images/probe/situation_room.jpg")?
+    const names = r.faces.filter((f) => f.name != nil).map((f) => f.name)
+    expect(names).toContain("obama")
+    expect(names).toContain("biden")
+    expect(names).not.toContain("harris")
+    expect(r.faces[0].candidates).toHaveLength(3)
+    gal.close()
+    return nil
+})
+
+test("galeria: salvar, carregar, listar e remover", (): error => {
+    const gal = face.gallery(eng)?
+    gal.enroll("biden", "images/gallery/biden.jpg")?
+    expect(gal.enroll("biden", "images/probe/biden_2013.jpg")?).toBe(2)
+    gal.enrollEmbedding("harris", eng.embedding("images/gallery/harris.jpg")?)?
+    gal.save("out/test_galeria.json")?
+    gal.close()
+
+    const loaded = face.gallery(eng, "out/test_galeria.json")?
+    const list = loaded.list()?
+    expect(list).toHaveLength(2)
+    expect(list[0].samples).toBe(2)
+    const r = loaded.identify("images/probe/harris_senado.jpg")?
+    expect(r.faces[0].name).toBe("harris")
+    expect(loaded.remove("harris")?).toBe(true)
+    expect(loaded.remove("harris")?).toBe(false)
+    const r2 = loaded.identify("images/probe/harris_senado.jpg")?
+    expect(r2.faces[0].name).toBeNil()
+    loaded.close()
+    return nil
+})
+
+test("limiar alto rejeita a correspondência", (): error => {
+    const gal = face.gallery(eng)?
+    gal.enroll("biden", "images/gallery/biden.jpg")?
+    const r = gal.identify("images/probe/biden_2013.jpg", 0.95)?
+    expect(r.faces[0].name).toBeNil()
+    expect(r.threshold).toBe(0.95)
+    gal.close()
+    return nil
+})
+
+test("imagem sem rosto ou inválida", (): error => {
+    const [r, err] = eng.compare("images/gallery/obama.jpg", "nao_existe.jpg")
+    expect(r).toBeNil()
+    expect(err).not.toBeNil()
+    const [_d, berr] = eng.detectBytes("isto não é uma imagem")
+    expect(berr.message).toContain("decode image")
+    return nil
+})
+
+test("draw salva a imagem anotada", (): error => {
+    const r = eng.detect("images/gallery/obama.jpg")?
+    face.draw("images/gallery/obama.jpg", "out/test_draw.png", r)?
+    expect(fs.exists("out/test_draw.png")).toBe(true)
+    return nil
+})

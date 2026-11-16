@@ -1,0 +1,40 @@
+// Exemplo 2 — verificação 1:1: as duas fotos são da mesma pessoa?
+//   fogu run examples/comparar.fg [foto_a foto_b]
+// Sem argumentos compara alguns pares das fotos de images/ (domínio público).
+import face from "../face.fg"
+import path from "fogu:path"
+import system from "fogu:system"
+
+fn fail(msg) {
+    print("erro:", msg)
+    system.exit(1)
+}
+
+fn round2(x) {
+    if x < 0 { return int(x * 100 - 0.5) / 100.0 }
+    return int(x * 100 + 0.5) / 100.0
+}
+
+let pairs = [
+    ["images/gallery/biden.jpg", "images/probe/biden_2013.jpg"],      // Biden em 2021 e em 2013
+    ["images/gallery/harris.jpg", "images/probe/harris_senado.jpg"],  // Harris em 2021 e em 2017
+    ["images/gallery/obama.jpg", "images/gallery/biden.jpg"],         // pessoas diferentes
+    ["images/gallery/harris.jpg", "images/probe/biden_2013.jpg"],     // pessoas diferentes
+]
+if len(system.args) >= 2 { pairs = [[system.args[0], system.args[1]]] }
+
+const [eng, err] = face.engine()
+if err != nil { fail(err.message) }
+
+print(`limiar: similaridade >= ${face.DEFAULT_THRESHOLD} = mesma pessoa`)
+for p in pairs {
+    const [r, cerr] = eng.compare(p[0], p[1])
+    if cerr != nil {
+        print(`  ${path.basename(p[0])} x ${path.basename(p[1])}: ${cerr.message}`)
+        continue
+    }
+    let verdict = "pessoas diferentes"
+    if r.same { verdict = "MESMA PESSOA" }
+    print(`  ${path.basename(p[0])} x ${path.basename(p[1])}: ${round2(r.similarity)} -> ${verdict}`)
+}
+eng.close()

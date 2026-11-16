@@ -1,0 +1,22 @@
+[package]
+name = "foguface"
+version = "0.1.0"
+edition = "2024"
+description = "Detecção, reconhecimento e identificação de faces (insight-face-rs) com API C para o fogu:ffi"
+
+[dependencies]
+insight-face-rs = "4.2"
+# insight-face-rs 4.2.1 não compila com o ort rc.15 (API de Session mudou)
+ort = { version = "=2.0.0-rc.13", default-features = false }
+image = "0.25"
+imageproc = "0.27"
+ab_glyph = "0.2"
+serde_json = "1"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

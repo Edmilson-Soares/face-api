@@ -1,0 +1,40 @@
+// Exemplo 1 — detecção: encontra todos os rostos de uma foto e desenha
+// as caixas e os 5 pontos (olhos, nariz, cantos da boca).
+//   fogu run examples/detectar.fg [imagem]
+// Padrão: images/probe/situation_room.jpg (Casa Branca, domínio público).
+// Resultado: out/detectar.jpg
+import face from "../face.fg"
+import path from "fogu:path"
+import system from "fogu:system"
+
+let input = "images/probe/situation_room.jpg"
+if len(system.args) > 0 { input = system.args[0] }
+
+fn fail(msg) {
+    print("erro:", msg)
+    system.exit(1)
+}
+
+fn round2(x) {
+    if x < 0 { return int(x * 100 - 0.5) / 100.0 }
+    return int(x * 100 + 0.5) / 100.0
+}
+
+const [eng, err] = face.engine()
+if err != nil { fail(err.message) }
+
+const [r, derr] = eng.detect(input)
+if derr != nil { fail(derr.message) }
+
+print(`${path.basename(input)} (${r.width}x${r.height}): ${len(r.faces)} rosto(s)`)
+for i, f in r.faces {
+    const b = f.bbox
+    print(`  #${i + 1}  confiança ${round2(f.score)}  em (${int(b.x)}, ${int(b.y)})  ${int(b.width)}x${int(b.height)} px`)
+    f.label = `#${i + 1}`
+}
+
+const out = "out/detectar.jpg"
+const [_ok, werr] = face.draw(input, out, r.faces)
+if werr != nil { fail(werr.message) }
+print(`imagem anotada: ${out}`)
+eng.close()
