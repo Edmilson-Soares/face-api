@@ -37,7 +37,10 @@ o erro (com a lista de caminhos tentados) volta na primeira chamada que precisar
 | `linux-x64` | `native/linux-x64/libfoguface.so` | incluído |
 | `linux-arm64` | `native/linux-arm64/libfoguface.so` | incluído |
 | `macos-x64` | `native/macos-x64/libfoguface.dylib` | — |
-| `macos-arm64` | `native/macos-arm64/libfoguface.dylib` | — |
+| `macos-arm64` | `native/macos-arm64/libfoguface.dylib` | incluído |
+
+**Instalação** (Fogu 0.8.0+): `fogu add Edmilson-Soares/face-api@^0.2.0`. Os binários de `native/` vão
+no repositório git, então a lib já funciona depois de instalada — sem Rust/cargo na máquina.
 
 Ordem de busca: o caminho passado a `load(path)`, a variável `FOGU_FACE_LIB`,
 `native/<plataforma>/`, `native/` e o build do cargo no projeto em execução, uma
@@ -57,7 +60,7 @@ sh build.sh                  # Linux/macOS/WSL: o sistema atual
 sh build.sh all              # Linux x64/arm64 e macOS x64/arm64 (cargo-zigbuild + zig)
 ```
 
-## Callbacks do fogu:ffi (Fogu 0.7+, testado com o 0.7.4)
+## Callbacks do fogu:ffi (requer Fogu 0.8.0+)
 
 A camada nativa usa `ffi.callback` (veja `_native.fg`, igual em todas as libs deste repositório):
 
@@ -74,7 +77,7 @@ A camada nativa usa `ffi.callback` (veja `_native.fg`, igual em todas as libs de
   padrão do pacote oficial `hardware`).
 
 As respostas (detecção, embeddings, identificação) chegam inteiras pelo **sink** (`fface_set_sink`): antes, um buffer pequeno fazia a inferência rodar **duas vezes**; agora roda uma vez só, sem buffer de 1 MB "por garantia". As imagens em memória vão para a lib com `buffer.write` direto (antes eram copiadas byte a byte para uma lista).
-- **Fogu 0.7.4**: o código compilado chama direto as funções FFI de assinatura numérica (sem
+- **Fogu 0.7.4+** (e 0.8.0): o código compilado chama direto as funções FFI de assinatura numérica (sem
   alocação por chamada), então sondar status/eventos num laço é barato; `fogu .` roda o projeto
   (o script `start` do `fogu.json`); os tipos `int32`, `uint8`, `float64`... valem nas assinaturas.
 <!-- /fogu:plataformas -->
